@@ -74,7 +74,25 @@ module ActiveMerchant #:nodoc:
         request = build_request(:authorization, money, @options)
         commit(request)
       end
+      
+      # Authorize 10 cents to get a guwid
+      # This is the official way of doing a store according to WC's support staff.
+      # The authorization will invalidate after a couple of days, because it will never be captured.
+      # YOU SHOULD MAKE THIS CLEAR TO YOUR USERS IN YOUR T&C's.
+      def store(creditcard, options = {})
+        authorize(10, creditcard, options.merge(:recurring => 'Initial'))
+      end
 
+      # update means unstoring and storing the new one
+      def update(billing_id, creditcard, options = {})
+        unstore(billing_id, options)
+        store(creditcard, options)
+      end
+
+      # this is not supported by wirecard. just be sure to forget the guwid and never use it again ;-)
+      def unstore(billing_id, options = {})
+        # NOP
+      end
 
       # Capture Authorization
       def capture(money, authorization, options = {})
@@ -86,9 +104,14 @@ module ActiveMerchant #:nodoc:
 
 
       # Purchase
-      def purchase(money, creditcard, options = {})
+      def purchase(money, creditcard_or_billing_id, options = {})
         prepare_options_hash(options)
-        @options[:credit_card] = creditcard
+        if creditcard_or_billing_id.is_a?(String)
+          @options[:authorization] = creditcard_or_billing_id
+          @options[:recurring] = 'Repeated'
+        else
+          @options[:credit_card] = creditcard_or_billing_id
+        end
         request = build_request(:purchase, money, @options)
         commit(request)
       end
@@ -161,7 +184,10 @@ module ActiveMerchant #:nodoc:
 
           xml.tag! 'CC_TRANSACTION' do
             xml.tag! 'TransactionID', options[:order_id]
-            if [:authorization, :purchase].include?(action)
+            if options[:recurring] == 'Repeated' && options[:authorization]
+              add_invoice(xml, money, options)
+              xml.tag! 'GuWID', options[:authorization]
+            elsif [:authorization, :purchase].include?(action)
               add_invoice(xml, money, options)
               add_creditcard(xml, options[:credit_card])
               add_address(xml, options[:billing_address])
@@ -176,7 +202,7 @@ module ActiveMerchant #:nodoc:
       def add_invoice(xml, money, options)
         xml.tag! 'Amount', amount(money)
         xml.tag! 'Currency', options[:currency] || currency(money)
-        xml.tag! 'CountryCode', options[:billing_address][:country]
+        xml.tag! 'CountryCode', options[:billing_address][:country] if options[:billing_address] and options[:billing_address][:country]
         xml.tag! 'RECURRING_TRANSACTION' do
           xml.tag! 'Type', options[:recurring] || 'Single'
         end
