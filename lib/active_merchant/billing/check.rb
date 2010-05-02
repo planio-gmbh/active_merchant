@@ -5,17 +5,21 @@ module ActiveMerchant #:nodoc:
     # not backed by any database.
     # 
     # You may use Check in place of CreditCard with any gateway that supports it. Currently, only
-    # +BraintreeGateway+ supports the Check object.
+    # +BrainTreeGateway+ and +WirecardGateway+ support the Check object.
     class Check
       include Validateable
       
-      attr_accessor :first_name, :last_name, :routing_number, :account_number, :account_holder_type, :account_type, :number
+      attr_accessor :first_name, :last_name, :company_name, :routing_number, :account_number, :account_holder_type, :account_type, :number, :country
       
       # Used for Canadian bank accounts
       attr_accessor :institution_number, :transit_number
       
+      # Used for Italian bank accounts
+      attr_accessor :identification_number
+      
       def name
         @name ||= "#{@first_name} #{@last_name}".strip
+        @name = @company_name if @name.blank?
       end
       
       def name=(value)
@@ -25,6 +29,10 @@ module ActiveMerchant #:nodoc:
         segments = value.split(' ')
         @last_name = segments.pop
         @first_name = segments.join(' ')
+      end
+      
+      def country
+        @country ||= 'US'
       end
       
       def validate
@@ -50,17 +58,21 @@ module ActiveMerchant #:nodoc:
       #   (3(d1 + d4 + d7) + 7(d2 + d5 + d8) + 1(d3 + d6 + d9))mod 10 = 0
       # See http://en.wikipedia.org/wiki/Routing_transit_number#Internal_checksums
       def valid_routing_number?
-        d = routing_number.to_s.split('').map(&:to_i).select { |d| (0..9).include?(d) }
-        case d.size
-          when 9 then
-            checksum = ((3 * (d[0] + d[3] + d[6])) +
-                        (7 * (d[1] + d[4] + d[7])) +
-                             (d[2] + d[5] + d[8])) % 10
-            case checksum
-              when 0 then true
-              else        false
-            end
-          else false
+        if country == 'US' # checksums validation only works within the U.S.
+          d = routing_number.to_s.split('').map(&:to_i).select { |d| (0..9).include?(d) }
+          case d.size
+            when 9 then
+              checksum = ((3 * (d[0] + d[3] + d[6])) +
+                          (7 * (d[1] + d[4] + d[7])) +
+                               (d[2] + d[5] + d[8])) % 10
+              case checksum
+                when 0 then true
+                else        false
+              end
+            else false
+          end
+        else
+          true
         end
       end
     end
