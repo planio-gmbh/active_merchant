@@ -20,6 +20,7 @@ module ActiveMerchant #:nodoc:
       def name
         @name ||= "#{@first_name} #{@last_name}".strip
         @name = @company_name if @name.blank?
+        @name
       end
       
       def name=(value)
