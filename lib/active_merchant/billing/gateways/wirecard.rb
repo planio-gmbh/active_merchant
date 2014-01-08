@@ -75,12 +75,12 @@ module ActiveMerchant #:nodoc:
         commit(request, options)
       end
       
-      # Authorize 10 cents to get a guwid
+      # Authorize 1 Euro to get a guwid
       # This is the official way of doing a store according to WC's support staff.
       # The authorization will invalidate after a couple of days, because it will never be captured.
       # YOU SHOULD MAKE THIS CLEAR TO YOUR USERS IN YOUR T&C's.
       def store(creditcard_or_check, options = {})
-        authorize(10, creditcard_or_check, options.merge(:recurring => 'Initial'))
+        authorize(100, creditcard_or_check, options.merge(:recurring => 'Initial'))
       end
 
       # update means unstoring and storing the new one
