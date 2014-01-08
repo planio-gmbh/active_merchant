@@ -316,6 +316,10 @@ module ActiveMerchant #:nodoc:
         root.elements.to_a.each do |node|
           if node.name =~ Regexp.new("FNC_#{mode}_")
             status = REXML::XPath.first(node, "#{mode}_TRANSACTION/PROCESSING_STATUS")
+            transaction_id = REXML::XPath.first(node, "#{mode}_TRANSACTION/TransactionID")
+            if transaction_id && transaction_id.respond_to?(:text)
+              response[:TransactionID] = transaction_id.text
+            end
           end
         end
         message = ""
