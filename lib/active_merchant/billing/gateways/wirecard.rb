@@ -4,16 +4,27 @@ module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
     class WirecardGateway < Gateway
       # Test server location
-      TEST_URL = 'https://c3-test.wirecard.com/secure/ssl-gateway'
+      TEST_URLS = {
+        :elastic_payments =>  'https://api-test.wirecard.com/engine/rest/paymentmethods/', #'http://requestb.in/q1oqovq1'
+        :legacy_c3_gateway => 'https://c3-test.wirecard.com/secure/ssl-gateway'
+      }
      
       # Live server location
-      LIVE_URL = 'https://c3.wirecard.com/secure/ssl-gateway'
+      LIVE_URLS = {
+        :elastic_payments => '',
+        :legacy_c3_gateway => 'https://c3.wirecard.com/secure/ssl-gateway'
+      }
 
       # The Namespaces are not really needed, because it just tells the System, that there's actually no namespace used.
       # It's just specified here for completeness.
       ENVELOPE_NAMESPACES = {
+        :elastic_payments => {
+  				'xmlns' => 'http://www.elastic-payments.com/schema/payment'
+        },
+        :legacy_c3_gateway => {
         'xmlns:xsi' => 'http://www.w3.org/1999/XMLSchema-instance',
 				'xsi:noNamespaceSchemaLocation' => 'wirecard.xsd'
+			}
 			}
 
 			PERMITTED_TRANSACTIONS = %w[ AUTHORIZATION CAPTURE_AUTHORIZATION PURCHASE DEBIT ]
@@ -29,6 +40,9 @@ module ActiveMerchant #:nodoc:
       # number 5551234 within area code 202 (country code 1).
       VALID_PHONE_FORMAT = /\+\d{1,3}(\(?\d{3}\)?)?\d{3}-\d{4}-\d{3}/
       
+      BAD_XML_ERROR_MESSAGE = "No valid XML response message received. \
+                            Propably wrong credentials supplied with HTTP header."
+
       # The countries the gateway supports merchants from as 2 digit ISO country codes
       # TODO: Check supported countries
       self.supported_countries = ['DE']
@@ -50,14 +64,17 @@ module ActiveMerchant #:nodoc:
       # The currency should normally be EUROs
       self.default_currency = 'EUR'
 
-      # 100 is 1.00 Euro
-      self.money_format = :cents
+      def money_format
+        return :cents if @options[:api_version] == :legacy_c3_gateway
+      end
 
       def initialize(options = {})
         # verify that username and password are supplied
-        requires!(options, :login, :password)
+        [:legacy_c3_gateway, :elastic_payments].each do |api_version|
+          requires!(options[api_version], :login, :password)
+        end
         # unfortunately Wirecard also requires a BusinessCaseSignature in the XML request
-        requires!(options, :signature)
+        requires!(options[:legacy_c3_gateway], :signature)
         @options = options
         super
       end
@@ -69,10 +86,14 @@ module ActiveMerchant #:nodoc:
 
       # Authorization
       def authorize(money, creditcard_or_check, options = {})
+        if options[:transaction_mode] == :eft
+          Response.new(true, "EFT does not support Authorizations. Returning success, but we didn't do anything.")
+        else
         prepare_options_hash(options)
         @options[:credit_card_or_check] = creditcard_or_check
         request = build_request(:authorization, money, @options)
         commit(request, options)
+      end
       end
       
       # Authorize 1 Euro to get a guwid
@@ -117,14 +138,12 @@ module ActiveMerchant #:nodoc:
       end
 
       # Debit
-      def debit(money, check_or_billing_id, options={})
+      def debit(money, check, options={})
         prepare_options_hash(options)
-        if check_or_billing_id.is_a?(String)
-          @options[:authorization] = check_or_billing_id
-          @options[:recurring] = 'Repeated'
-        else
-          @options[:credit_card_or_check] = check_or_billing_id
-        end
+
+        @options[:credit_card_or_check] = check
+        @options[:recurring] = options[:authorization].present? ? 'recurring' : 'first'
+
         request = build_request(:debit, money, @options)
         commit(request, options)
       end
@@ -132,6 +151,7 @@ module ActiveMerchant #:nodoc:
     private
 
       def prepare_options_hash(options)
+        options[:api_version] ||= :legacy_c3_gateway
         @options.update(options)
         setup_address_hash!(options)
       end
@@ -148,14 +168,21 @@ module ActiveMerchant #:nodoc:
       # Contact WireCard, make the XML request, and parse the
       # reply into a Response object
       def commit(request, options={})
-	      headers = { 'Content-Type' => 'text/xml',
+	      headers = { 'Content-Type' => 'application/xml',
+	                  'Accept' => 'application/xml',
 	                  'Authorization' => encoded_credentials }
 
-	      response = parse(ssl_post(test? ? TEST_URL : LIVE_URL, request, headers), options)
+	      response = parse(ssl_post(test? ? TEST_URLS[options[:api_version]] : LIVE_URLS[options[:api_version]], request, headers), options)
         # Pending Status also means Acknowledged (as stated in their specification)
-	      success = response[:FunctionResult] == "ACK" || response[:FunctionResult] == "PENDING"
+	      success = response[:TransactionState] == "success" || response[:FunctionResult] == "ACK" || response[:FunctionResult] == "PENDING"
 	      message = response[:Message]
-        authorization = (success && @options[:action] == :authorization) ? response[:GuWID] : nil
+        authorization = if success && @options[:action] == :authorization
+          response[:GuWID]
+        elsif success && @options[:transaction_mode] == :eft
+          response[:TransactionID]
+        else
+          nil
+        end
 
         Response.new(success, message, response,
           :test => test?,
@@ -169,18 +196,27 @@ module ActiveMerchant #:nodoc:
       def build_request(action, money, options = {})
 				xml = Builder::XmlMarkup.new :indent => 2
 				xml.instruct!
+
+        case options[:api_version]
+        when :elastic_payments
+          xml.tag! 'payment', ENVELOPE_NAMESPACES[:elastic_payments] do
+            xml.tag! 'merchant-account-id', options[:elastic_payments][:merchant_account_id] || options[:legacy_c3_gateway][:login]
+            add_transaction_data(xml, action, money, options)
+          end
+        when :legacy_c3_gateway
 				xml.tag! 'WIRECARD_BXML' do
 				  xml.tag! 'W_REQUEST' do
           xml.tag! 'W_JOB' do
               # TODO: OPTIONAL, check what value needs to be insert here
               xml.tag! 'JobID', 'test dummy data'
               # UserID for this transaction
-              xml.tag! 'BusinessCaseSignature', options[:signature] || options[:login]
+                xml.tag! 'BusinessCaseSignature', options[:legacy_c3_gateway][:signature] || options[:legacy_c3_gateway][:login]
               # Create the whole rest of the message
               add_transaction_data(xml, action, money, options)
 				    end
 				  end
 				end
+  			end
 				xml.target!
       end
 
@@ -190,8 +226,30 @@ module ActiveMerchant #:nodoc:
         # TODO: require order_id instead of auto-generating it if not supplied
         options[:order_id] ||= generate_unique_id
         transaction_type = action.to_s.upcase
-        mode = options[:transaction_mode] == :eft ? 'FT' : 'CC'
 
+        case options[:api_version]
+        when :elastic_payments
+          raise 'Only Sepa direct debit transactions are supported by elastic payments api client atm.' unless options[:transaction_mode] == :eft
+          xml.tag! 'request-id', options[:order_id]
+          case options[:transaction_mode]
+          when :eft
+            xml.tag! 'transaction-type', 'pending-debit'
+            xml.tag! 'payment-methods' do
+              xml.tag! 'payment-method', :name => 'sepadirectdebit'
+            end
+            xml.tag! 'periodic' do
+              xml.tag! 'periodic-type', 'recurring'
+              xml.tag! 'sequence-type', options[:recurring]
+            end
+            if options[:authorization]
+              xml.tag! 'parent-transaction-id', options[:authorization]
+            end
+          end
+          add_invoice(xml, money, options)
+          add_check(xml, options[:credit_card_or_check])
+          xml.tag! 'descriptor', options[:usage] unless options[:usage].blank?
+        when :legacy_c3_gateway
+          mode = options[:transaction_mode] == :eft ? 'FT' : 'CC'
         xml.tag! "FNC_#{mode}_#{transaction_type}" do
           # TODO: OPTIONAL, check which param should be used here
           xml.tag! 'FunctionID', options[:description] || 'Test dummy FunctionID'
@@ -216,15 +274,21 @@ module ActiveMerchant #:nodoc:
           end
         end
       end
+      end
 
 			# Includes the payment (amount, currency, country) to the transaction-xml
       def add_invoice(xml, money, options)
+        case options[:api_version]
+        when :elastic_payments
+          xml.tag! 'requested-amount', amount(money), :currency => self.default_currency
+        when :legacy_c3_gateway
         xml.tag! 'Amount', amount(money)
         xml.tag! 'Currency', options[:currency] || currency(money)
         xml.tag! 'CountryCode', options[:billing_address][:country] if options[:transaction_mode] != :eft and options[:billing_address] and options[:billing_address][:country]
         xml.tag! 'RECURRING_TRANSACTION' do
           xml.tag! 'Type', options[:recurring] || 'Single'
         end
+      end
       end
 
 			# Includes the credit-card data to the transaction-xml
@@ -242,6 +306,22 @@ module ActiveMerchant #:nodoc:
       # Adds check data to the transaction-xml
       def add_check(xml, check)
         raise "Check must be supplied!" if check.nil?
+        case options[:api_version]
+        when :elastic_payments
+          xml.tag! 'account-holder' do
+            xml.tag! 'first-name', check.first_name
+            xml.tag! 'last-name', check.last_name
+          end
+          xml.tag! 'bank-account' do
+            xml.tag! 'iban', check.account_number
+            xml.tag! 'bic', check.routing_number
+          end
+          xml.tag! 'mandate' do
+            xml.tag! 'mandate-id', check.mandate_id
+            xml.tag! 'signed-date', check.signed_at.strftime('%F')
+          end
+          xml.tag! 'creditor-id', options[:elastic_payments][:creditor_id]
+        when :legacy_c3_gateway
         xml.tag! 'EXTERNAL_ACCOUNT' do
           xml.tag! 'FirstName', check.first_name
           xml.tag! 'LastName', check.last_name
@@ -257,6 +337,7 @@ module ActiveMerchant #:nodoc:
             end
           end
         end
+      end
       end
 
 			# Includes the IP address of the customer to the transaction-xml
@@ -292,19 +373,34 @@ module ActiveMerchant #:nodoc:
       # Read the XML message from the gateway and check if it was successful,
 			# and also extract required return values from the response.
       def parse(xml, options={})
-        basepath = '/WIRECARD_BXML/W_RESPONSE'
         response = {}
-
         xml = REXML::Document.new(xml)
+
+        case options[:api_version]
+        when :elastic_payments
+          response[:TransactionState] = REXML::XPath.first(xml, "/payment/transaction-state").try(:text)
+          statuses = REXML::XPath.first(xml, "/payment/statuses")
+          if response[:TransactionState].present?
+            response[:TransactionID] = REXML::XPath.first(xml, "/payment/transaction-id").try(:text)
+            response[:RequestID] = REXML::XPath.first(xml, "/payment/request-id").try(:text)
+            response[:ReferenceID] = REXML::XPath.first(xml, "/payment/provider-transaction-reference-id").try(:text)
+            response[:DueDate] = REXML::XPath.first(xml, "/payment/due-date").try(:text)
+            response[:Message] = statuses.map{|status| status.attributes['description']}
+          else
+            response[:Message] = BAD_XML_ERROR_MESSAGE
+          end
+        when :legacy_c3_gateway
+          basepath = '/WIRECARD_BXML/W_RESPONSE'
+
         if root = REXML::XPath.first(xml, "#{basepath}/W_JOB")
           parse_response(response, root, options)
         elsif root = REXML::XPath.first(xml, "//ERROR")
           parse_error(response, root)
         else
-          response[:Message] = "No valid XML response message received. \
-                                Propably wrong credentials supplied with HTTP header."
+            response[:Message] = BAD_XML_ERROR_MESSAGE
         end
 
+        end
         response
       end
 
@@ -322,7 +418,7 @@ module ActiveMerchant #:nodoc:
             end
           end
         end
-        message = ""
+        message = []
         if status
           if info = status.elements['Info']
             message << info.text
@@ -332,24 +428,19 @@ module ActiveMerchant #:nodoc:
             response[node.name.to_sym] = (node.text || '').strip
           end
         end
-        parse_error(root, message)
+        message = parse_error(root, message)
         response[:Message] = message
       end
 
       # Parse a generic error response from the gateway
-      def parse_error(root, message = "")
+      def parse_error(root, message = [])
         # Get errors if available and append them to the message
-        errors = errors_to_string(root)
-        unless errors.strip.blank?
-          message << ' - ' unless message.strip.blank?
-          message << errors
-        end
-        message
+        message += errors_to_array(root)
       end
 
       # Parses all <ERROR> elements in the response and converts the information
       # to a single string
-      def errors_to_string(root)
+      def errors_to_array(root)
         # Get context error messages (can be 0..*)
         errors = []
         REXML::XPath.each(root, "//ERROR | //DETAIL") do |error_elem|
@@ -361,28 +452,28 @@ module ActiveMerchant #:nodoc:
           end
           errors << error
         end
-        # Convert all messages to a single string
-        string = ''
+        # Convert all messages to nice strings
+        result = []
         errors.each do |error|
-          string << error[:Message]
+          string = error[:Message]
           error[:Advice].each_with_index do |advice, index|
             string << ' (' if index == 0
             string << "#{index+1}. #{advice}"
             string << ' and ' if index < error[:Advice].size - 1
             string << ')' if index == error[:Advice].size - 1
           end
+          result << string
         end
-        string
+        result
       end
 
       # Encode login and password in Base64 to supply as HTTP header
       # (for http basic authentication)
       def encoded_credentials
-        credentials = [@options[:login], @options[:password]].join(':')
+        credentials = [@options[@options[:api_version]][:login], @options[@options[:api_version]][:password]].join(':')
         "Basic " << Base64.encode64(credentials).strip
       end
       
     end
   end
 end
-

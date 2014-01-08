@@ -17,6 +17,9 @@ module ActiveMerchant #:nodoc:
       # Used for Italian bank accounts
       attr_accessor :identification_number
       
+      # Used for SEPA Direct Debit
+      attr_accessor :mandate_id, :signed_at
+
       def name
         @name ||= "#{@first_name} #{@last_name}".strip
         @name = @company_name if @name.blank?
@@ -37,7 +40,7 @@ module ActiveMerchant #:nodoc:
       end
       
       def validate
-        [:name, :routing_number, :account_number].each do |attr|
+        [:name, :routing_number, :account_number, :mandate_id, :signed_at].each do |attr|
           errors.add(attr, "cannot be empty") if self.send(attr).blank?
         end
         
@@ -48,12 +51,21 @@ module ActiveMerchant #:nodoc:
         
         errors.add(:account_type, "must be checking or savings") if
             !account_type.blank? && !%w[checking savings].include?(account_type.to_s)
+
+        validate_iban # TODO: only if account country in SEPA countries
       end
       
       def type
         'check'
       end
       
+
+      def validate_iban
+        iban = IBANTools::IBAN.new(self.account_number)
+        iban.validation_errors.each{|e| errors.add :account_number, e }
+        self.account_number = iban.code
+      end
+
       # Routing numbers may be validated by calculating a checksum and dividing it by 10. The
       # formula is:
       #   (3(d1 + d4 + d7) + 7(d2 + d5 + d8) + 1(d3 + d6 + d9))mod 10 = 0
