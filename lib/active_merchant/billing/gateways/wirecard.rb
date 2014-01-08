@@ -205,7 +205,6 @@ module ActiveMerchant #:nodoc:
               add_invoice(xml, money, options)
               if options[:transaction_mode] == :eft
                 add_check(xml, options[:credit_card_or_check])
-                xml.tag! 'Usage', options[:usage] unless options[:usage].blank?
               else
                 add_creditcard(xml, options[:credit_card_or_check])
               end
@@ -213,6 +212,7 @@ module ActiveMerchant #:nodoc:
             elsif action == :capture_authorization
               xml.tag! 'GuWID', options[:authorization] if options[:authorization]
             end
+            xml.tag! 'Usage', options[:usage] unless options[:usage].blank?
           end
         end
       end
