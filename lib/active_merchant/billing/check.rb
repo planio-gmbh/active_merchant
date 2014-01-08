@@ -27,9 +27,9 @@ module ActiveMerchant #:nodoc:
         return if value.blank?
 
         @name = value
-        segments = value.split(' ')
+        segments = value.split(/\s+/)
         @last_name = segments.pop
-        @first_name = segments.join(' ')
+        @first_name = segments.present? ? segments.join(' ') : @last_name
       end
       
       def country
