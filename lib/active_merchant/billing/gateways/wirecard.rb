@@ -22,24 +22,24 @@ module ActiveMerchant #:nodoc:
   				'xmlns' => 'http://www.elastic-payments.com/schema/payment'
         },
         :legacy_c3_gateway => {
-        'xmlns:xsi' => 'http://www.w3.org/1999/XMLSchema-instance',
-				'xsi:noNamespaceSchemaLocation' => 'wirecard.xsd'
-			}
+          'xmlns:xsi' => 'http://www.w3.org/1999/XMLSchema-instance',
+  				'xsi:noNamespaceSchemaLocation' => 'wirecard.xsd'
+			  }
 			}
 
 			PERMITTED_TRANSACTIONS = %w[ AUTHORIZATION CAPTURE_AUTHORIZATION PURCHASE DEBIT ]
 
       RETURN_CODES = %w[ ACK NOK ]
 
-      # Wirecard only allows phone numbers with a format like this: +xxx(yyy)zzz-zzzz-ppp, where: 
-      #   xxx = Country code 
-      #   yyy = Area or city code 
-      #   zzz-zzzz = Local number 
-      #   ppp = PBX extension 
-      # For example, a typical U.S. or Canadian number would be "+1(202)555-1234-739" indicating PBX extension 739 at phone 
+      # Wirecard only allows phone numbers with a format like this: +xxx(yyy)zzz-zzzz-ppp, where:
+      #   xxx = Country code
+      #   yyy = Area or city code
+      #   zzz-zzzz = Local number
+      #   ppp = PBX extension
+      # For example, a typical U.S. or Canadian number would be "+1(202)555-1234-739" indicating PBX extension 739 at phone
       # number 5551234 within area code 202 (country code 1).
       VALID_PHONE_FORMAT = /\+\d{1,3}(\(?\d{3}\)?)?\d{3}-\d{4}-\d{3}/
-      
+
       BAD_XML_ERROR_MESSAGE = "No valid XML response message received. \
                             Propably wrong credentials supplied with HTTP header."
 
@@ -89,11 +89,11 @@ module ActiveMerchant #:nodoc:
         if options[:transaction_mode] == :eft
           Response.new(true, "EFT does not support Authorizations. Returning success, but we didn't do anything.")
         else
-        prepare_options_hash(options)
-        @options[:credit_card_or_check] = creditcard_or_check
-        request = build_request(:authorization, money, @options)
-        commit(request, options)
-      end
+          prepare_options_hash(options)
+          @options[:credit_card_or_check] = creditcard_or_check
+          request = build_request(:authorization, money, @options)
+          commit(request, options)
+        end
       end
       
       # Authorize 1 Euro to get a guwid
@@ -204,18 +204,18 @@ module ActiveMerchant #:nodoc:
             add_transaction_data(xml, action, money, options)
           end
         when :legacy_c3_gateway
-				xml.tag! 'WIRECARD_BXML' do
-				  xml.tag! 'W_REQUEST' do
-          xml.tag! 'W_JOB' do
-              # TODO: OPTIONAL, check what value needs to be insert here
-              xml.tag! 'JobID', 'test dummy data'
-              # UserID for this transaction
+  				xml.tag! 'WIRECARD_BXML' do
+  				  xml.tag! 'W_REQUEST' do
+            xml.tag! 'W_JOB' do
+                # TODO: OPTIONAL, check what value needs to be insert here
+                xml.tag! 'JobID', 'test dummy data'
+                # UserID for this transaction
                 xml.tag! 'BusinessCaseSignature', options[:legacy_c3_gateway][:signature] || options[:legacy_c3_gateway][:login]
-              # Create the whole rest of the message
-              add_transaction_data(xml, action, money, options)
-				    end
-				  end
-				end
+                # Create the whole rest of the message
+                add_transaction_data(xml, action, money, options)
+  				    end
+  				  end
+  				end
   			end
 				xml.target!
       end
@@ -250,30 +250,30 @@ module ActiveMerchant #:nodoc:
           xml.tag! 'descriptor', options[:usage] unless options[:usage].blank?
         when :legacy_c3_gateway
           mode = options[:transaction_mode] == :eft ? 'FT' : 'CC'
-        xml.tag! "FNC_#{mode}_#{transaction_type}" do
-          # TODO: OPTIONAL, check which param should be used here
-          xml.tag! 'FunctionID', options[:description] || 'Test dummy FunctionID'
+          xml.tag! "FNC_#{mode}_#{transaction_type}" do
+            # TODO: OPTIONAL, check which param should be used here
+            xml.tag! 'FunctionID', options[:description] || 'Test dummy FunctionID'
 
-          xml.tag! "#{mode}_TRANSACTION", :mode => test? ? 'demo' : 'live' do
-            xml.tag! 'TransactionID', options[:order_id]
-            if options[:recurring] == 'Repeated' && options[:authorization]
-              add_invoice(xml, money, options)
-              xml.tag!((options[:transaction_mode] == :eft ? 'ReferenceGuWID' : 'GuWID'), options[:authorization])
-            elsif [:authorization, :purchase, :debit].include?(action)
-              add_invoice(xml, money, options)
-              if options[:transaction_mode] == :eft
-                add_check(xml, options[:credit_card_or_check])
-              else
-                add_creditcard(xml, options[:credit_card_or_check])
+            xml.tag! "#{mode}_TRANSACTION", :mode => test? ? 'demo' : 'live' do
+              xml.tag! 'TransactionID', options[:order_id]
+              if options[:recurring] == 'Repeated' && options[:authorization]
+                add_invoice(xml, money, options)
+                xml.tag!((options[:transaction_mode] == :eft ? 'ReferenceGuWID' : 'GuWID'), options[:authorization])
+              elsif [:authorization, :purchase, :debit].include?(action)
+                add_invoice(xml, money, options)
+                if options[:transaction_mode] == :eft
+                  add_check(xml, options[:credit_card_or_check])
+                else
+                  add_creditcard(xml, options[:credit_card_or_check])
+                end
+                add_address(xml, options[:billing_address])
+              elsif action == :capture_authorization
+                xml.tag! 'GuWID', options[:authorization] if options[:authorization]
               end
-              add_address(xml, options[:billing_address])
-            elsif action == :capture_authorization
-              xml.tag! 'GuWID', options[:authorization] if options[:authorization]
+              xml.tag! 'Usage', options[:usage] unless options[:usage].blank?
             end
-            xml.tag! 'Usage', options[:usage] unless options[:usage].blank?
           end
         end
-      end
       end
 
 			# Includes the payment (amount, currency, country) to the transaction-xml
@@ -282,13 +282,13 @@ module ActiveMerchant #:nodoc:
         when :elastic_payments
           xml.tag! 'requested-amount', amount(money), :currency => self.default_currency
         when :legacy_c3_gateway
-        xml.tag! 'Amount', amount(money)
-        xml.tag! 'Currency', options[:currency] || currency(money)
-        xml.tag! 'CountryCode', options[:billing_address][:country] if options[:transaction_mode] != :eft and options[:billing_address] and options[:billing_address][:country]
-        xml.tag! 'RECURRING_TRANSACTION' do
-          xml.tag! 'Type', options[:recurring] || 'Single'
+          xml.tag! 'Amount', amount(money)
+          xml.tag! 'Currency', options[:currency] || currency(money)
+          xml.tag! 'CountryCode', options[:billing_address][:country] if options[:transaction_mode] != :eft and options[:billing_address] and options[:billing_address][:country]
+          xml.tag! 'RECURRING_TRANSACTION' do
+            xml.tag! 'Type', options[:recurring] || 'Single'
+          end
         end
-      end
       end
 
 			# Includes the credit-card data to the transaction-xml
@@ -322,22 +322,22 @@ module ActiveMerchant #:nodoc:
           end
           xml.tag! 'creditor-id', options[:elastic_payments][:creditor_id]
         when :legacy_c3_gateway
-        xml.tag! 'EXTERNAL_ACCOUNT' do
-          xml.tag! 'FirstName', check.first_name
-          xml.tag! 'LastName', check.last_name
-          xml.tag! 'CompanyName', check.company_name unless check.company_name.blank?
-          xml.tag! 'AccountNumber', check.account_number
-          xml.tag! 'AccountType', check.account_type == 'savings' ? 'S' : 'C'
-          xml.tag! 'BankCode', check.routing_number
-          xml.tag! 'Country', check.country
-          xml.tag! 'CheckNumber', check.number
-          unless check.identification_number.blank?
-            xml.tag! 'COUNTRY_SPECIFIC' do
-              xml.tag! 'IdentificationNumber', check.identification_number 
+          xml.tag! 'EXTERNAL_ACCOUNT' do
+            xml.tag! 'FirstName', check.first_name
+            xml.tag! 'LastName', check.last_name
+            xml.tag! 'CompanyName', check.company_name unless check.company_name.blank?
+            xml.tag! 'AccountNumber', check.account_number
+            xml.tag! 'AccountType', check.account_type == 'savings' ? 'S' : 'C'
+            xml.tag! 'BankCode', check.routing_number
+            xml.tag! 'Country', check.country
+            xml.tag! 'CheckNumber', check.number
+            unless check.identification_number.blank?
+              xml.tag! 'COUNTRY_SPECIFIC' do
+                xml.tag! 'IdentificationNumber', check.identification_number
+              end
             end
           end
         end
-      end
       end
 
 			# Includes the IP address of the customer to the transaction-xml
@@ -392,13 +392,13 @@ module ActiveMerchant #:nodoc:
         when :legacy_c3_gateway
           basepath = '/WIRECARD_BXML/W_RESPONSE'
 
-        if root = REXML::XPath.first(xml, "#{basepath}/W_JOB")
-          parse_response(response, root, options)
-        elsif root = REXML::XPath.first(xml, "//ERROR")
-          parse_error(response, root)
-        else
+          if root = REXML::XPath.first(xml, "#{basepath}/W_JOB")
+            parse_response(response, root, options)
+          elsif root = REXML::XPath.first(xml, "//ERROR")
+            parse_error(response, root)
+          else
             response[:Message] = BAD_XML_ERROR_MESSAGE
-        end
+          end
 
         end
         response
