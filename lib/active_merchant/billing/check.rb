@@ -3,20 +3,22 @@ module ActiveMerchant #:nodoc:
     # The Check object is a plain old Ruby object, similar to CreditCard. It supports validation
     # of necessary attributes such as checkholder's name, routing and account numbers, but it is
     # not backed by any database.
-    # 
-    # You may use Check in place of CreditCard with any gateway that supports it. Currently, only
-    # +BrainTreeGateway+ and +WirecardGateway+ support the Check object.
+    #
+    # You may use Check in place of CreditCard with any gateway that supports it.
     class Check
       include Validateable
-      
-      attr_accessor :first_name, :last_name, :company_name, :routing_number, :account_number, :account_holder_type, :account_type, :number, :country
-      
+
+      attr_accessor :first_name, :last_name, :company_name,
+                    :bank_name, :routing_number, :account_number,
+                    :account_holder_type, :account_type, :number,
+                    :country
+
       # Used for Canadian bank accounts
       attr_accessor :institution_number, :transit_number
-      
+
       # Used for Italian bank accounts
       attr_accessor :identification_number
-      
+
       # Used for SEPA Direct Debit
       attr_accessor :mandate_id, :signed_at
 
@@ -25,7 +27,7 @@ module ActiveMerchant #:nodoc:
         @name = @company_name if @name.blank?
         @name
       end
-      
+
       def name=(value)
         return if value.blank?
 
@@ -34,31 +36,30 @@ module ActiveMerchant #:nodoc:
         @last_name = segments.pop
         @first_name = segments.present? ? segments.join(' ') : @last_name
       end
-      
+
       def country
         @country ||= 'US'
       end
-      
+
       def validate
         [:name, :routing_number, :account_number, :mandate_id, :signed_at].each do |attr|
           errors.add(attr, "cannot be empty") if self.send(attr).blank?
         end
-        
+
         errors.add(:routing_number, "is invalid") unless valid_routing_number?
-        
+
         errors.add(:account_holder_type, "must be personal or business") if
             !account_holder_type.blank? && !%w[business personal].include?(account_holder_type.to_s)
-        
+
         errors.add(:account_type, "must be checking or savings") if
             !account_type.blank? && !%w[checking savings].include?(account_type.to_s)
 
         validate_iban # TODO: only if account country in SEPA countries
       end
-      
+
       def type
         'check'
       end
-      
 
       def validate_iban
         iban = IBANTools::IBAN.new(self.account_number)
