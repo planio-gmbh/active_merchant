@@ -1,4 +1,5 @@
 require 'base64'
+require 'iban-tools'
 
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
