@@ -2,11 +2,11 @@ module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
     # For more information on the Authorize.Net Gateway please visit their {Integration Center}[http://developer.authorize.net/]
     #
-    # The login and password are not the username and password you use to 
-    # login to the Authorize.Net Merchant Interface. Instead, you will 
-    # use the API Login ID as the login and Transaction Key as the 
+    # The login and password are not the username and password you use to
+    # login to the Authorize.Net Merchant Interface. Instead, you will
+    # use the API Login ID as the login and Transaction Key as the
     # password.
-    # 
+    #
     # ==== How to Get Your API Login ID and Transaction Key
     #
     # 1. Log into the Merchant Interface
@@ -14,47 +14,52 @@ module ActiveMerchant #:nodoc:
     # 3. Click on API Login ID and Transaction Key in the Security section
     # 4. Type in the answer to the secret question configured on setup
     # 5. Click Submit
-    # 
+    #
     # ==== Automated Recurring Billing (ARB)
-    # 
+    #
     # Automated Recurring Billing (ARB) is an optional service for submitting and managing recurring, or subscription-based, transactions.
-    # 
-    # To use recurring, update_recurring, and cancel_recurring ARB must be enabled for your account.
-    # 
+    #
+    # To use recurring, update_recurring, cancel_recurring and status_recurring ARB must be enabled for your account.
+    #
     # Information about ARB is available on the {Authorize.Net website}[http://www.authorize.net/solutions/merchantsolutions/merchantservices/automatedrecurringbilling/].
     # Information about the ARB API is available at the {Authorize.Net Integration Center}[http://developer.authorize.net/]
     class AuthorizeNetGateway < Gateway
       API_VERSION = '3.1'
 
-      class_inheritable_accessor :test_url, :live_url, :arb_test_url, :arb_live_url
+      class_attribute :arb_test_url, :arb_live_url
 
       self.test_url = "https://test.authorize.net/gateway/transact.dll"
       self.live_url = "https://secure.authorize.net/gateway/transact.dll"
 
       self.arb_test_url = 'https://apitest.authorize.net/xml/v1/request.api'
       self.arb_live_url = 'https://api.authorize.net/xml/v1/request.api'
-      
-      class_inheritable_accessor :duplicate_window
+
+      class_attribute :duplicate_window
 
       APPROVED, DECLINED, ERROR, FRAUD_REVIEW = 1, 2, 3, 4
 
-      RESPONSE_CODE, RESPONSE_REASON_CODE, RESPONSE_REASON_TEXT = 0, 2, 3
-      AVS_RESULT_CODE, TRANSACTION_ID, CARD_CODE_RESPONSE_CODE  = 5, 6, 38
+      RESPONSE_CODE, RESPONSE_REASON_CODE, RESPONSE_REASON_TEXT, AUTHORIZATION_CODE = 0, 2, 3, 4
+      AVS_RESULT_CODE, TRANSACTION_ID, CARD_CODE_RESPONSE_CODE, CARDHOLDER_AUTH_CODE  = 5, 6, 38, 39
 
-      self.supported_countries = ['US']
-      self.supported_cardtypes = [:visa, :master, :american_express, :discover]
+      self.default_currency = 'USD'
+
+      self.supported_countries = ['US', 'CA', 'GB']
+      self.supported_cardtypes = [:visa, :master, :american_express, :discover, :diners_club, :jcb]
       self.homepage_url = 'http://www.authorize.net/'
       self.display_name = 'Authorize.Net'
 
       CARD_CODE_ERRORS = %w( N S )
       AVS_ERRORS = %w( A E N R W Z )
+      AVS_REASON_CODES = %w(27 45)
+      TRANSACTION_ALREADY_ACTIONED = %w(310 311)
 
       AUTHORIZE_NET_ARB_NAMESPACE = 'AnetApi/xml/v1/schema/AnetApiSchema.xsd'
 
       RECURRING_ACTIONS = {
         :create => 'ARBCreateSubscription',
         :update => 'ARBUpdateSubscription',
-        :cancel => 'ARBCancelSubscription'
+        :cancel => 'ARBCancelSubscription',
+        :status => 'ARBGetSubscriptionStatus'
       }
 
       # Creates a new AuthorizeNetGateway
@@ -66,11 +71,10 @@ module ActiveMerchant #:nodoc:
       #
       # * <tt>:login</tt> -- The Authorize.Net API Login ID (REQUIRED)
       # * <tt>:password</tt> -- The Authorize.Net Transaction Key. (REQUIRED)
-      # * <tt>:test</tt> -- +true+ or +false+. If true, perform transactions against the test server. 
+      # * <tt>:test</tt> -- +true+ or +false+. If true, perform transactions against the test server.
       #   Otherwise, perform transactions against the production server.
       def initialize(options = {})
         requires!(options, :login, :password)
-        @options = options
         super
       end
 
@@ -80,12 +84,13 @@ module ActiveMerchant #:nodoc:
       # ==== Parameters
       #
       # * <tt>money</tt> -- The amount to be authorized as an Integer value in cents.
-      # * <tt>creditcard</tt> -- The CreditCard details for the transaction.
+      # * <tt>paysource</tt> -- The CreditCard or Check details for the transaction.
       # * <tt>options</tt> -- A hash of optional parameters.
-      def authorize(money, creditcard, options = {})
+      def authorize(money, paysource, options = {})
         post = {}
+        add_currency_code(post, money, options)
         add_invoice(post, options)
-        add_creditcard(post, creditcard)
+        add_payment_source(post, paysource, options)
         add_address(post, options)
         add_customer_data(post, options)
         add_duplicate_window(post)
@@ -98,12 +103,13 @@ module ActiveMerchant #:nodoc:
       # ==== Parameters
       #
       # * <tt>money</tt> -- The amount to be purchased as an Integer value in cents.
-      # * <tt>creditcard</tt> -- The CreditCard details for the transaction.
+      # * <tt>paysource</tt> -- The CreditCard or Check details for the transaction.
       # * <tt>options</tt> -- A hash of optional parameters.
-      def purchase(money, creditcard, options = {})
+      def purchase(money, paysource, options = {})
         post = {}
+        add_currency_code(post, money, options)
         add_invoice(post, options)
-        add_creditcard(post, creditcard)
+        add_payment_source(post, paysource, options)
         add_address(post, options)
         add_customer_data(post, options)
         add_duplicate_window(post)
@@ -120,6 +126,7 @@ module ActiveMerchant #:nodoc:
       def capture(money, authorization, options = {})
         post = {:trans_id => authorization}
         add_customer_data(post, options)
+        add_invoice(post, options)
         commit('PRIOR_AUTH_CAPTURE', money, post)
       end
 
@@ -130,32 +137,48 @@ module ActiveMerchant #:nodoc:
       # * <tt>authorization</tt> - The authorization returned from the previous authorize request.
       def void(authorization, options = {})
         post = {:trans_id => authorization}
+        add_duplicate_window(post)
         commit('VOID', nil, post)
       end
 
-      # Credit an account.
+      # Refund a transaction.
       #
-      # This transaction is also referred to as a Refund and indicates to the gateway that
+      # This transaction indicates to the gateway that
       # money should flow from the merchant to the customer.
       #
       # ==== Parameters
       #
       # * <tt>money</tt> -- The amount to be credited to the customer as an Integer value in cents.
-      # * <tt>identification</tt> -- The ID of the original transaction against which the credit is being issued.
+      # * <tt>identification</tt> -- The ID of the original transaction against which the refund is being issued.
       # * <tt>options</tt> -- A hash of parameters.
       #
       # ==== Options
       #
-      # * <tt>:card_number</tt> -- The credit card number the credit is being issued to. (REQUIRED)
-      def credit(money, identification, options = {})
+      # * <tt>:card_number</tt> -- The credit card number the refund is being issued to. (REQUIRED)
+      #   You can either pass the last four digits of the card number or the full card number.
+      # * <tt>:first_name</tt> -- The first name of the account being refunded.
+      # * <tt>:last_name</tt> -- The last name of the account being refunded.
+      # * <tt>:zip</tt> -- The postal code of the account being refunded.
+      def refund(money, identification, options = {})
         requires!(options, :card_number)
 
         post = { :trans_id => identification,
                  :card_num => options[:card_number]
                }
+
+        post[:first_name] = options[:first_name] if options[:first_name]
+        post[:last_name] = options[:last_name] if options[:last_name]
+        post[:zip] = options[:zip] if options[:zip]
+
         add_invoice(post, options)
+        add_duplicate_window(post)
 
         commit('CREDIT', money, post)
+      end
+
+      def credit(money, identification, options = {})
+        deprecated CREDIT_DEPRECATION_MESSAGE
+        refund(money, identification, options)
       end
 
       # Create a recurring payment.
@@ -177,7 +200,7 @@ module ActiveMerchant #:nodoc:
       #   For example, to charge the customer once every three months the hash would be
       #   +:interval => { :unit => :months, :length => 3 }+ (REQUIRED)
       # * <tt>:duration</tt> -- A hash containing keys for the <tt>:start_date</tt> the subscription begins (also the date the
-      #   initial billing occurs) and the total number of billing <tt>:occurences</tt> or payments for the subscription. (REQUIRED)
+      #   initial billing occurs) and the total number of billing <tt>:occurrences</tt> or payments for the subscription. (REQUIRED)
       def recurring(money, creditcard, options={})
         requires!(options, :interval, :duration, :billing_address)
         requires!(options[:interval], :length, [:unit, :days, :months])
@@ -226,8 +249,21 @@ module ActiveMerchant #:nodoc:
         recurring_commit(:cancel, request)
       end
 
+      # Get Subscription Status of a recurring payment.
+      #
+      # This transaction gets the status of an existing Automated Recurring Billing (ARB) subscription. Your account must have ARB enabled.
+      #
+      # ==== Parameters
+      #
+      # * <tt>subscription_id</tt> -- A string containing the +subscription_id+ of the recurring payment already in place
+      #   for a given credit card. (REQUIRED)
+      def status_recurring(subscription_id)
+        request = build_recurring_request(:status, :subscription_id => subscription_id)
+        recurring_commit(:status, request)
+      end
+
       private
-      
+
       def commit(action, money, parameters)
         parameters[:amount] = amount(money) unless action == 'VOID'
 
@@ -237,7 +273,8 @@ module ActiveMerchant #:nodoc:
         url = test? ? self.test_url : self.live_url
         data = ssl_post url, post_data(action, parameters)
 
-        response = parse(data)
+        response          = parse(data)
+        response[:action] = action
 
         message = message_from(response)
 
@@ -248,8 +285,8 @@ module ActiveMerchant #:nodoc:
         #   (TESTMODE) Successful Sale
         test_mode = test? || message =~ /TESTMODE/
 
-        Response.new(success?(response), message, response, 
-          :test => test_mode, 
+        Response.new(success?(response), message, response,
+          :test => test_mode,
           :authorization => response[:transaction_id],
           :fraud_review => fraud_review?(response),
           :avs_result => { :code => response[:avs_result_code] },
@@ -258,7 +295,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def success?(response)
-        response[:response_code] == APPROVED
+        response[:response_code] == APPROVED && TRANSACTION_ALREADY_ACTIONED.exclude?(response[:response_reason_code])
       end
 
       def fraud_review?(response)
@@ -270,11 +307,13 @@ module ActiveMerchant #:nodoc:
 
         results = {
           :response_code => fields[RESPONSE_CODE].to_i,
-          :response_reason_code => fields[RESPONSE_REASON_CODE], 
+          :response_reason_code => fields[RESPONSE_REASON_CODE],
           :response_reason_text => fields[RESPONSE_REASON_TEXT],
           :avs_result_code => fields[AVS_RESULT_CODE],
           :transaction_id => fields[TRANSACTION_ID],
-          :card_code => fields[CARD_CODE_RESPONSE_CODE]
+          :card_code => fields[CARD_CODE_RESPONSE_CODE],
+          :authorization_code => fields[AUTHORIZATION_CODE],
+          :cardholder_authentication_code => fields[CARDHOLDER_AUTH_CODE]
         }
         results
       end
@@ -290,9 +329,14 @@ module ActiveMerchant #:nodoc:
         post[:delim_data]     = "TRUE"
         post[:delim_char]     = ","
         post[:encap_char]     = "$"
+        post[:solution_ID]    = application_id if application_id.present? && application_id != "ActiveMerchant"
 
         request = post.merge(parameters).collect { |key, value| "x_#{key}=#{CGI.escape(value.to_s)}" }.join("&")
         request
+      end
+
+      def add_currency_code(post, money, options)
+        post[:currency_code] = options[:currency] || currency(money)
       end
 
       def add_invoice(post, options)
@@ -300,12 +344,32 @@ module ActiveMerchant #:nodoc:
         post[:description] = options[:description]
       end
 
-      def add_creditcard(post, creditcard)
+      def add_creditcard(post, creditcard, options={})
         post[:card_num]   = creditcard.number
         post[:card_code]  = creditcard.verification_value if creditcard.verification_value?
         post[:exp_date]   = expdate(creditcard)
         post[:first_name] = creditcard.first_name
         post[:last_name]  = creditcard.last_name
+      end
+
+      def add_payment_source(params, source, options={})
+        if card_brand(source) == "check"
+          add_check(params, source, options)
+        else
+          add_creditcard(params, source, options)
+        end
+      end
+
+      def add_check(post, check, options)
+        post[:method] = "ECHECK"
+        post[:bank_name] = check.bank_name
+        post[:bank_aba_code] = check.routing_number
+        post[:bank_acct_num] = check.account_number
+        post[:bank_acct_type] = check.account_type
+        post[:echeck_type] = "WEB"
+        post[:bank_acct_name] = check.name
+        post[:bank_check_number] = check.number if check.number.present?
+        post[:recurring_billing] = (options[:recurring] ? "TRUE" : "FALSE")
       end
 
       def add_customer_data(post, options)
@@ -315,14 +379,23 @@ module ActiveMerchant #:nodoc:
         end
 
         if options.has_key? :customer
-          post[:cust_id] = options[:customer]
+          post[:cust_id] = options[:customer] if Float(options[:customer]) rescue nil
         end
 
         if options.has_key? :ip
           post[:customer_ip] = options[:ip]
         end
+
+        if options.has_key? :cardholder_authentication_value
+          post[:cardholder_authentication_value] = options[:cardholder_authentication_value]
+        end
+
+        if options.has_key? :authentication_indicator
+          post[:authentication_indicator] = options[:authentication_indicator]
+        end
+
       end
-      
+
       # x_duplicate_window won't be sent by default, because sending it changes the response.
       # "If this field is present in the request with or without a value, an enhanced duplicate transaction response will be sent."
       # (as of 2008-12-30) http://www.authorize.net/support/AIM_guide_SCC.pdf
@@ -342,7 +415,7 @@ module ActiveMerchant #:nodoc:
           post[:country] = address[:country].to_s
           post[:state]   = address[:state].blank?  ? 'n/a' : address[:state]
         end
-        
+
         if address = options[:shipping_address]
           post[:ship_to_first_name] = address[:first_name].to_s
           post[:ship_to_last_name] = address[:last_name].to_s
@@ -367,13 +440,15 @@ module ActiveMerchant #:nodoc:
         end
       end
 
-      def message_from(results)  
+      def message_from(results)
         if results[:response_code] == DECLINED
           return CVVResult.messages[ results[:card_code] ] if CARD_CODE_ERRORS.include?(results[:card_code])
-          return AVSResult.messages[ results[:avs_result_code] ] if AVS_ERRORS.include?(results[:avs_result_code])
+          if AVS_REASON_CODES.include?(results[:response_reason_code]) && AVS_ERRORS.include?(results[:avs_result_code])
+            return AVSResult.messages[ results[:avs_result_code] ]
+          end
         end
 
-        return results[:response_reason_text].nil? ? '' : results[:response_reason_text][0..-2]
+        (results[:response_reason_text] ? results[:response_reason_text].chomp('.') : '')
       end
 
       def expdate(creditcard)
@@ -437,6 +512,13 @@ module ActiveMerchant #:nodoc:
         xml.target!
       end
 
+      # Builds body for ARBGetSubscriptionStatusRequest
+      def build_arb_status_subscription_request(xml, options)
+        xml.tag!('subscriptionId', options[:subscription_id])
+
+        xml.target!
+      end
+
       # Adds subscription information
       def add_arb_subscription(xml, options)
         xml.tag!('subscription') do
@@ -444,7 +526,7 @@ module ActiveMerchant #:nodoc:
           xml.tag!('name', options[:subscription_name]) if options[:subscription_name]
           # Contains information about the payment schedule
           add_arb_payment_schedule(xml, options)
-          # The amount to be billed to the customer 
+          # The amount to be billed to the customer
           # for each payment in the subscription
           xml.tag!('amount', amount(options[:amount])) if options[:amount]
           if trial = options[:trial]
@@ -483,7 +565,7 @@ module ActiveMerchant #:nodoc:
       def add_arb_duration(xml, options)
         duration = options[:duration]
         return unless duration
-        # The date the subscription begins 
+        # The date the subscription begins
         # (also the date the initial billing occurs)
         xml.tag!('startDate', duration[:start_date]) if duration[:start_date]
         # Number of billing occurrences or payments for the subscription
@@ -529,7 +611,7 @@ module ActiveMerchant #:nodoc:
       end
 
       # Adds customer’s bank account information
-      # Note: This element should only be included 
+      # Note: This element should only be included
       # when the payment method is bank account.
       def add_arb_bank_account(xml, options)
         bank_account = options[:bank_account]
@@ -541,10 +623,10 @@ module ActiveMerchant #:nodoc:
           xml.tag!('routingNumber', bank_account[:routing_number])
           # The bank account number used for payment of the subscription
           xml.tag!('accountNumber', bank_account[:account_number])
-          # The full name of the individual associated 
+          # The full name of the individual associated
           # with the bank account number
           xml.tag!('nameOfAccount', bank_account[:name_of_account])
-          # The full name of the individual associated 
+          # The full name of the individual associated
           # with the bank account number (optional)
           xml.tag!('bankName', bank_account[:bank_name]) if bank_account[:bank_name]
           # The type of electronic check transaction used for the subscription
@@ -615,7 +697,7 @@ module ActiveMerchant #:nodoc:
       def recurring_commit(action, request)
         url = test? ? arb_test_url : arb_live_url
         xml = ssl_post(url, request, "Content-Type" => "text/xml")
-        
+
         response = recurring_parse(action, xml)
 
         message = response[:message] || response[:text]
